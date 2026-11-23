@@ -38,6 +38,8 @@ st.markdown("""
 
 div.stButton > button[kind="primary"] { background: #365a7a; color: white; border: 1px solid #365a7a; border-radius: 8px; font-weight: 600; }
 div.stButton > button[kind="primary"]:hover { background: #2d4d69; border-color: #2d4d69; color: white; }
+div[data-testid="stFormSubmitButton"] > button[kind="primaryFormSubmit"] { background: #365a7a; color: white; border: 1px solid #365a7a; border-radius: 8px; font-weight: 600; }
+div[data-testid="stFormSubmitButton"] > button[kind="primaryFormSubmit"]:hover { background: #2d4d69; border-color: #2d4d69; color: white; }
 </style>
 """, unsafe_allow_html=True)
 
@@ -59,6 +61,15 @@ def tgl(t):
     return f"{t.day} {BULAN[t.month-1]} {t.year}"
 
 def rp(n): return f"Rp{int(n):,}".replace(",", ".")
+
+def waktu_singkat(t):
+    if not t:
+        return "-"
+    try:
+        waktu = datetime.strptime(str(t)[:19], "%Y-%m-%d %H:%M:%S")
+    except ValueError:
+        return str(t)
+    return f"{waktu.day} {BULAN[waktu.month-1]} {waktu.year}, {waktu:%H:%M}"
 
 def badge(s):
     cfg = {
@@ -1300,10 +1311,14 @@ def halaman_kelola_pengguna():
     st.title("Kelola Pengguna")
     if not butuh_admin():
         return
+    st.caption(
+        "Tambah akun petugas, nonaktifkan akun yang tidak dipakai, dan reset "
+        "password. Hanya admin yang dapat membuka halaman ini."
+    )
     pengguna_aktif = st.session_state["pengguna"]
 
     with st.expander("Tambah petugas baru"):
-        with st.form("form_tambah_petugas"):
+        with st.form("form_tambah_petugas", border=False):
             nama = st.text_input("Nama lengkap", placeholder="Cth: Rina Petugas")
             username = st.text_input("Username", placeholder="Cth: rina")
             awal = st.text_input(
@@ -1374,7 +1389,7 @@ def halaman_kelola_pengguna():
                 st.subheader(
                     f"Reset password: {target['nama']} ({target['username']})"
                 )
-                with st.form(f"form_reset_password_{reset_id}"):
+                with st.form(f"form_reset_password_{reset_id}", border=False):
                     baru = st.text_input(
                         "Password baru", type="password",
                         key=f"reset_baru_{reset_id}",
@@ -1404,10 +1419,10 @@ def halaman_kelola_pengguna():
                     st.session_state["reset_pengguna"] = None
                     st.rerun()
 
-    kolom = st.columns([1.6, 1.4, 1, 1.1, 1.7, 1.5, 2.4])
+    lebar_kolom = [2.8, 2.4, 2.8, 3.4]
+    kolom = st.columns(lebar_kolom)
     for col, label in zip(
-        kolom,
-        ("Nama", "Username", "Peran", "Status", "Terakhir Login", "Password", "Aksi"),
+        kolom, ("Pengguna", "Peran & Status", "Aktivitas", "Aksi")
     ):
         col.markdown(f"**{label}**")
     st.markdown(
@@ -1415,30 +1430,31 @@ def halaman_kelola_pengguna():
     )
 
     for p in data:
-        baris = st.columns([1.6, 1.4, 1, 1.1, 1.7, 1.5, 2.4])
-        baris[0].write(p["nama"])
-        baris[1].write(p["username"])
-        baris[2].write(p["peran"])
+        baris = st.columns(lebar_kolom)
+        baris[0].markdown(f"**{p['nama']}**  \n@{p['username']}")
         if p["aktif"]:
-            baris[3].markdown(
+            label_status = (
                 "<span style='background:#15803d;color:#fff;padding:2px 10px;"
-                "border-radius:10px;font-size:12px;font-weight:600'>AKTIF</span>",
-                unsafe_allow_html=True,
+                "border-radius:10px;font-size:12px;font-weight:600;"
+                "white-space:nowrap'>AKTIF</span>"
             )
         else:
-            baris[3].markdown(
+            label_status = (
                 "<span style='background:#4b5563;color:#fff;padding:2px 10px;"
-                "border-radius:10px;font-size:12px;font-weight:600'>NONAKTIF</span>",
-                unsafe_allow_html=True,
+                "border-radius:10px;font-size:12px;font-weight:600;"
+                "white-space:nowrap'>NONAKTIF</span>"
             )
-        baris[4].write(p["terakhir_login"] or "-")
-        baris[5].write(
-            "Wajib ganti" if p["harus_ganti_password"] else "Sudah diganti"
+        baris[1].markdown(
+            f"**{p['peran']}**  \n{label_status}", unsafe_allow_html=True
         )
-        with baris[6]:
-            aksi_status, aksi_reset = st.columns(2)
+        baris[2].markdown(
+            f"Terakhir masuk: {waktu_singkat(p['terakhir_login'])}  \n"
+            f"Password: "
+            f"{'wajib diganti' if p['harus_ganti_password'] else 'sudah diganti'}"
+        )
+        with baris[3]:
             if p["aktif"]:
-                if aksi_status.button(
+                if st.button(
                     "Nonaktifkan", key=f"nonaktif_{p['id']}",
                     icon=":material/block:", use_container_width=True,
                 ):
@@ -1447,7 +1463,7 @@ def halaman_kelola_pengguna():
                     }
                     st.rerun()
             else:
-                if aksi_status.button(
+                if st.button(
                     "Aktifkan", key=f"aktifkan_{p['id']}",
                     icon=":material/check_circle:", use_container_width=True,
                 ):
@@ -1460,12 +1476,16 @@ def halaman_kelola_pengguna():
                     else:
                         flash(f"Akun '{p['username']}' diaktifkan.")
                         st.rerun()
-            if aksi_reset.button(
+            if st.button(
                 "Reset Password", key=f"reset_{p['id']}",
                 icon=":material/key:", use_container_width=True,
             ):
                 st.session_state["reset_pengguna"] = p["id"]
                 st.rerun()
+        st.markdown(
+            "<hr style='margin:0 0 12px 0; border:0; border-top:1px solid #eef2f7'>",
+            unsafe_allow_html=True,
+        )
 
 # ================= DETAIL =================
 def tampilkan_detail_transaksi(id_trx):
