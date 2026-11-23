@@ -836,6 +836,92 @@ def verifikasi_login(username, password):
         conn.close()
 
 
+def daftar_pengguna():
+    # Daftar akun beserta status login untuk halaman Kelola Pengguna.
+    return q(
+        """SELECT p.id, p.nama, p.username, p.peran, p.aktif,
+                  p.dibuat_pada, l.harus_ganti_password, l.terakhir_login
+           FROM pengguna p LEFT JOIN login l ON l.id_pengguna=p.id
+           ORDER BY p.peran, p.username"""
+    )
+
+
+def status_pengguna(id_pengguna):
+    # Status terbaru akun; dipakai untuk memutus sesi yang dinonaktifkan.
+    rows = q(
+        "SELECT id, nama, username, peran, aktif FROM pengguna WHERE id=?",
+        (id_pengguna,),
+    )
+    return rows[0] if rows else None
+
+
+def set_status_pengguna(id_pengguna, aktif, id_aktor=None):
+    # Aktifkan/nonaktifkan akun. Admin terakhir dan akun sendiri dilindungi.
+    aktif = 1 if aktif else 0
+    conn = koneksi()
+    try:
+        conn.execute("BEGIN IMMEDIATE")
+        row = conn.execute(
+            "SELECT id, peran, aktif FROM pengguna WHERE id=?", (id_pengguna,)
+        ).fetchone()
+        if not row:
+            raise ValueError("Pengguna tidak ditemukan.")
+        if not aktif:
+            if id_aktor is not None and row["id"] == id_aktor:
+                raise ValueError("Anda tidak dapat menonaktifkan akun sendiri.")
+            if row["peran"] == "ADMIN" and row["aktif"]:
+                sisa = conn.execute(
+                    "SELECT COUNT(*) n FROM pengguna "
+                    "WHERE peran='ADMIN' AND aktif=1 AND id<>?",
+                    (id_pengguna,),
+                ).fetchone()["n"]
+                if sisa == 0:
+                    raise ValueError("Minimal satu admin harus tetap aktif.")
+        cur = conn.execute(
+            "UPDATE pengguna SET aktif=?, diubah_pada=? WHERE id=?",
+            (aktif, _sekarang(), id_pengguna),
+        )
+        if cur.rowcount != 1:
+            raise ValueError("Pengguna tidak ditemukan.")
+        conn.commit()
+        return "Akun diaktifkan." if aktif else "Akun dinonaktifkan."
+    except Exception:
+        conn.rollback()
+        raise
+    finally:
+        conn.close()
+
+
+def reset_password_pengguna(id_pengguna, password_baru):
+    # Reset oleh admin; pengguna wajib mengganti sendiri saat login berikutnya.
+    _validasi_password(password_baru)
+    conn = koneksi()
+    try:
+        conn.execute("BEGIN IMMEDIATE")
+        cur = conn.execute(
+            """UPDATE login SET password_hash=?, algoritma='scrypt',
+               harus_ganti_password=1, gagal_login=0, terkunci_sampai=NULL
+               WHERE id_pengguna=?""",
+            (hash_password(password_baru), id_pengguna),
+        )
+        if cur.rowcount != 1:
+            raise ValueError("Data login pengguna tidak ditemukan.")
+        conn.execute(
+            "UPDATE pengguna SET diubah_pada=? WHERE id=?",
+            (_sekarang(), id_pengguna),
+        )
+        conn.commit()
+        return (
+            "Password direset. Pengguna wajib mengganti password saat login "
+            "berikutnya."
+        )
+    except Exception:
+        conn.rollback()
+        raise
+    finally:
+        conn.close()
+
+
 def _seed_admin_awal(conn):
     """Buat akun admin pertama bila tabel pengguna masih kosong."""
     if conn.execute("SELECT 1 FROM pengguna LIMIT 1").fetchone():
