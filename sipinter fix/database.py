@@ -1,5 +1,9 @@
 """database.py — Skema, data statis (Excel), dan aturan bisnis SIPINTER."""
+import base64
 import hashlib
+import hmac
+import logging
+import os
 import sqlite3
 import re
 from pathlib import Path
@@ -69,6 +73,25 @@ CREATE TABLE IF NOT EXISTS master_buku_ref (
     kode_sumber TEXT PRIMARY KEY,
     id_buku INTEGER NOT NULL UNIQUE,
     FOREIGN KEY (id_buku) REFERENCES buku(id) ON DELETE CASCADE);
+CREATE TABLE IF NOT EXISTS pengguna (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    nama TEXT NOT NULL,
+    username TEXT NOT NULL UNIQUE COLLATE NOCASE,
+    peran TEXT NOT NULL DEFAULT 'PETUGAS'
+        CHECK (peran IN ('ADMIN','PETUGAS')),
+    aktif INTEGER NOT NULL DEFAULT 1,
+    dibuat_pada TEXT NOT NULL,
+    diubah_pada TEXT NOT NULL);
+CREATE TABLE IF NOT EXISTS login (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    id_pengguna INTEGER NOT NULL UNIQUE,
+    password_hash TEXT NOT NULL,
+    algoritma TEXT NOT NULL DEFAULT 'scrypt',
+    harus_ganti_password INTEGER NOT NULL DEFAULT 1,
+    terakhir_login TEXT,
+    gagal_login INTEGER NOT NULL DEFAULT 0,
+    terkunci_sampai TEXT,
+    FOREIGN KEY (id_pengguna) REFERENCES pengguna(id) ON DELETE CASCADE);
 """
 
 def koneksi():
@@ -88,6 +111,7 @@ def inisialisasi():
             "UPDATE transaksi SET denda_lunas=1 "
             "WHERE status='DIKEMBALIKAN'"
         )
+        _seed_admin_awal(conn)
         conn.commit()
     finally:
         conn.close()
@@ -607,3 +631,230 @@ def generate_kode_buku(kategori):
             nomor_terpakai.append(int(nomor))
     urut = max(nomor_terpakai, default=0) + 1
     return f"{kode_kat}-{urut:03d}"
+
+
+# ================= AUTENTIKASI =================
+# Parameter scrypt: OWASP menyarankan minimal N=2^17 (128 MiB). N=2^16 dipilih
+# karena ~64 MiB dan ~0,25 detik per hash pada mesin uji, cukup untuk aplikasi
+# satu perpustakaan dan tetap mahal untuk serangan brute force.
+SCRYPT_N = 65536
+SCRYPT_R = 8
+SCRYPT_P = 1
+SCRYPT_DKLEN = 32
+SCRYPT_SALT_BYTES = 16
+SCRYPT_MAXMEM = 128 * 1024 * 1024
+MAKS_GAGAL_LOGIN = 5
+DURASI_KUNCI_MENIT = 5
+PANJANG_MIN_PASSWORD = 8
+ADMIN_USERNAME = "admin"
+ADMIN_PASSWORD_DEFAULT = "admin123"
+
+
+def _sekarang():
+    return datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+
+
+def _scrypt_maxmem(n, r):
+    # scrypt membutuhkan sekitar 128*n*r byte; beri ruang dua kali lipat.
+    return max(SCRYPT_MAXMEM, 256 * n * r)
+
+
+def hash_password(password):
+    """Hash password dengan scrypt: skrip$n$r$p$salt_b64$hash_b64."""
+    if not isinstance(password, str) or not password:
+        raise ValueError("Password tidak boleh kosong.")
+    salt = os.urandom(SCRYPT_SALT_BYTES)
+    digest = hashlib.scrypt(
+        password.encode("utf-8"), salt=salt,
+        n=SCRYPT_N, r=SCRYPT_R, p=SCRYPT_P, dklen=SCRYPT_DKLEN,
+        maxmem=_scrypt_maxmem(SCRYPT_N, SCRYPT_R),
+    )
+    return "scrypt${}${}${}${}${}".format(
+        SCRYPT_N, SCRYPT_R, SCRYPT_P,
+        base64.b64encode(salt).decode("ascii"),
+        base64.b64encode(digest).decode("ascii"),
+    )
+
+
+def verifikasi_password(password, hash_tersimpan):
+    """Bandingkan password dengan hash tersimpan (waktu-konstan)."""
+    if not password or not hash_tersimpan:
+        return False
+    try:
+        skema, n, r, p, salt_b64, hash_b64 = hash_tersimpan.split("$")
+        if skema != "scrypt":
+            return False
+        n, r, p = int(n), int(r), int(p)
+        salt = base64.b64decode(salt_b64)
+        tersimpan = base64.b64decode(hash_b64)
+        digest = hashlib.scrypt(
+            password.encode("utf-8"), salt=salt,
+            n=n, r=r, p=p, dklen=len(tersimpan),
+            maxmem=_scrypt_maxmem(n, r),
+        )
+    except (ValueError, TypeError):
+        return False
+    return hmac.compare_digest(digest, tersimpan)
+
+
+def _validasi_password(password):
+    if not isinstance(password, str) or len(password) < PANJANG_MIN_PASSWORD:
+        raise ValueError(
+            f"Password minimal {PANJANG_MIN_PASSWORD} karakter."
+        )
+
+
+def buat_pengguna(nama, username, password, peran="PETUGAS", harus_ganti=True):
+    """Buat pengguna baru beserta kredensialnya. Mengembalikan id pengguna."""
+    nama = (nama or "").strip()
+    username = (username or "").strip()
+    if not nama or not username:
+        raise ValueError("Nama dan username wajib diisi.")
+    if peran not in ("ADMIN", "PETUGAS"):
+        raise ValueError("Peran harus ADMIN atau PETUGAS.")
+    _validasi_password(password)
+    hash_baru = hash_password(password)
+    sekarang = _sekarang()
+    conn = koneksi()
+    try:
+        conn.execute("BEGIN IMMEDIATE")
+        if conn.execute(
+            "SELECT 1 FROM pengguna WHERE username=?", (username,)
+        ).fetchone():
+            raise ValueError(f"Username '{username}' sudah dipakai.")
+        cur = conn.execute(
+            """INSERT INTO pengguna (nama,username,peran,aktif,dibuat_pada,diubah_pada)
+               VALUES (?,?,?,1,?,?)""",
+            (nama, username, peran, sekarang, sekarang),
+        )
+        conn.execute(
+            """INSERT INTO login (id_pengguna,password_hash,algoritma,harus_ganti_password)
+               VALUES (?,?,'scrypt',?)""",
+            (cur.lastrowid, hash_baru, 1 if harus_ganti else 0),
+        )
+        conn.commit()
+        return cur.lastrowid
+    except Exception:
+        conn.rollback()
+        raise
+    finally:
+        conn.close()
+
+
+def ubah_password(id_pengguna, password_baru):
+    """Ganti hash password dan lepas status wajib ganti password."""
+    _validasi_password(password_baru)
+    conn = koneksi()
+    try:
+        conn.execute("BEGIN IMMEDIATE")
+        cur = conn.execute(
+            """UPDATE login SET password_hash=?, algoritma='scrypt',
+               harus_ganti_password=0, gagal_login=0, terkunci_sampai=NULL
+               WHERE id_pengguna=?""",
+            (hash_password(password_baru), id_pengguna),
+        )
+        if cur.rowcount != 1:
+            raise ValueError("Data login pengguna tidak ditemukan.")
+        conn.execute(
+            "UPDATE pengguna SET diubah_pada=? WHERE id=?",
+            (_sekarang(), id_pengguna),
+        )
+        conn.commit()
+    except Exception:
+        conn.rollback()
+        raise
+    finally:
+        conn.close()
+
+
+def ganti_password(id_pengguna, password_lama, password_baru):
+    """Ganti password dengan verifikasi password lama. (berhasil, pesan)."""
+    rows = q("SELECT password_hash FROM login WHERE id_pengguna=?", (id_pengguna,))
+    if not rows or not verifikasi_password(password_lama, rows[0]["password_hash"]):
+        return False, "Password saat ini salah."
+    if password_lama == password_baru:
+        return False, "Password baru harus berbeda dari password saat ini."
+    try:
+        ubah_password(id_pengguna, password_baru)
+    except ValueError as error:
+        return False, str(error)
+    return True, "Password berhasil diubah."
+
+
+def verifikasi_login(username, password):
+    """Kembalikan dict pengguna bila kredensial valid, selain itu None."""
+    username = (username or "").strip()
+    if not username or not password:
+        return None
+    conn = koneksi()
+    try:
+        row = conn.execute(
+            """SELECT p.id, p.nama, p.username, p.peran, p.aktif,
+                      l.password_hash, l.harus_ganti_password,
+                      l.gagal_login, l.terkunci_sampai
+               FROM pengguna p JOIN login l ON l.id_pengguna=p.id
+               WHERE p.username=?""",
+            (username,),
+        ).fetchone()
+        if not row:
+            # Samakan biaya waktu dengan verifikasi pengguna yang ada agar
+            # penyerang tidak bisa menebak username dari lamanya respons.
+            hash_password(password)
+            return None
+        if not row["aktif"]:
+            return None
+        if row["terkunci_sampai"] and row["terkunci_sampai"] > _sekarang():
+            return None
+        if not verifikasi_password(password, row["password_hash"]):
+            gagal = row["gagal_login"] + 1
+            kunci = None
+            if gagal >= MAKS_GAGAL_LOGIN:
+                kunci = (
+                    datetime.now() + timedelta(minutes=DURASI_KUNCI_MENIT)
+                ).strftime("%Y-%m-%d %H:%M:%S")
+                gagal = 0
+            conn.execute(
+                "UPDATE login SET gagal_login=?, terkunci_sampai=? WHERE id_pengguna=?",
+                (gagal, kunci, row["id"]),
+            )
+            conn.commit()
+            return None
+        conn.execute(
+            """UPDATE login SET gagal_login=0, terkunci_sampai=NULL, terakhir_login=?
+               WHERE id_pengguna=?""",
+            (_sekarang(), row["id"]),
+        )
+        conn.commit()
+        return {
+            "id": row["id"],
+            "nama": row["nama"],
+            "username": row["username"],
+            "peran": row["peran"],
+            "harus_ganti_password": bool(row["harus_ganti_password"]),
+        }
+    finally:
+        conn.close()
+
+
+def _seed_admin_awal(conn):
+    """Buat akun admin pertama bila tabel pengguna masih kosong."""
+    if conn.execute("SELECT 1 FROM pengguna LIMIT 1").fetchone():
+        return
+    password = os.environ.get("SIPINTER_ADMIN_PASSWORD")
+    if not password:
+        password = ADMIN_PASSWORD_DEFAULT
+        logging.warning(
+            "SIPINTER_ADMIN_PASSWORD tidak diset; akun '%s' memakai password "
+            "awal bawaan dan wajib diganti saat login pertama.", ADMIN_USERNAME,
+        )
+    sekarang = _sekarang()
+    cur = conn.execute(
+        """INSERT INTO pengguna (nama,username,peran,aktif,dibuat_pada,diubah_pada)
+           VALUES (?,?,'ADMIN',1,?,?)""",
+        ("Administrator", ADMIN_USERNAME, sekarang, sekarang),
+    )
+    conn.execute(
+        """INSERT INTO login (id_pengguna,password_hash,algoritma,harus_ganti_password)
+           VALUES (?,?,'scrypt',1)""",
+        (cur.lastrowid, hash_password(password)),
+    )

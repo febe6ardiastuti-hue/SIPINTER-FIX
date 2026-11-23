@@ -44,7 +44,8 @@ div.stButton > button[kind="primary"]:hover { background: #2d4d69; border-color:
 db.inisialisasi()
 db.refresh_status()
 
-for k, v in {"halaman": "Dashboard", "detail_trx": None, "detail_pem": None, "detail_buk": None, "flash": None, "mode_tambah": False}.items():
+for k, v in {"halaman": "Dashboard", "detail_trx": None, "detail_pem": None, "detail_buk": None, "flash": None, "mode_tambah": False,
+             "pengguna": None}.items():
     st.session_state.setdefault(k, v)
 
 # ================= UTIL =================
@@ -168,6 +169,81 @@ def wa_sukses_kembali(t, p, b, denda):
 def wa_terlambat(t, p, b, hari, denda):
     return f"""Yth. {p['nama']},\n\nBerdasarkan catatan sistem, peminjaman buku Anda telah melewati batas waktu.\n\n*Buku:* {b['judul']}\n*Batas Kembali:* {tgl(t['tanggal_tenggat'])}\n*Keterlambatan:* {hari} hari\n*Total Denda:* Rp{denda:,}\n\nMohon segera kembalikan buku. Terima kasih.\n\nAdministrasi SIPINTER""".replace(",", ".")
 
+# ================= AUTENTIKASI (LOGIN) =================
+def _kartu_login():
+    with st.container():
+        st.markdown(
+            '<div style="text-align:center;padding:16px 0 8px 0">'
+            '<img src="data:image/png;base64,{}" width="110" alt="Logo SIPINTER">'
+            '<h2 style="margin:8px 0 0 0;color:#1e3a8a;letter-spacing:2px">SIPINTER</h2>'
+            '<p style="margin:4px 0 16px 0;color:#64748b">Sistem Informasi Peminjaman '
+            'Interaktif dan Terpadu</p></div>'.format(
+                base64.b64encode(logo_path.read_bytes()).decode("ascii")
+            ),
+            unsafe_allow_html=True,
+        )
+
+
+def halaman_login():
+    _, tengah, _ = st.columns([1, 1.4, 1])
+    with tengah:
+        _kartu_login()
+        with st.form("form_login"):
+            username = st.text_input("Username", placeholder="cth. admin")
+            password = st.text_input("Password", type="password")
+            masuk = st.form_submit_button(
+                "Masuk", type="primary", use_container_width=True
+            )
+        if masuk:
+            pengguna = db.verifikasi_login(username, password)
+            if not pengguna:
+                st.error("Username atau password salah.")
+            else:
+                st.session_state["pengguna"] = pengguna
+                st.session_state.update(halaman="Dashboard", mode_tambah=False)
+                tutup_detail()
+                st.rerun()
+
+
+def halaman_ganti_password():
+    pengguna = st.session_state["pengguna"]
+    _, tengah, _ = st.columns([1, 1.4, 1])
+    with tengah:
+        _kartu_login()
+        st.warning(
+            "Demi keamanan, password akun ini wajib diganti sebelum aplikasi "
+            "bisa dipakai."
+        )
+        with st.form("form_ganti_password"):
+            lama = st.text_input("Password saat ini", type="password")
+            baru = st.text_input(
+                f"Password baru (minimal {db.PANJANG_MIN_PASSWORD} karakter)",
+                type="password",
+            )
+            ulang = st.text_input("Ulangi password baru", type="password")
+            simpan = st.form_submit_button(
+                "Simpan password baru", type="primary", use_container_width=True
+            )
+        if simpan:
+            if baru != ulang:
+                st.error("Konfirmasi password baru tidak sama.")
+            elif len(baru or "") < db.PANJANG_MIN_PASSWORD:
+                st.error(f"Password minimal {db.PANJANG_MIN_PASSWORD} karakter.")
+            else:
+                berhasil, pesan = db.ganti_password(pengguna["id"], lama, baru)
+                if not berhasil:
+                    st.error(pesan)
+                else:
+                    pengguna["harus_ganti_password"] = False
+                    st.session_state["pengguna"] = pengguna
+                    st.success(pesan)
+                    st.rerun()
+        st.caption(f"Masuk sebagai {pengguna['username']}.")
+        if st.button("Batal dan kembali ke halaman login", use_container_width=True):
+            st.session_state["pengguna"] = None
+            st.rerun()
+
+
 # ================= SIDEBAR =================
 def render_sidebar():
     nav_icons = {
@@ -227,6 +303,22 @@ def render_sidebar():
             ):
                 st.session_state.update(halaman=nama, mode_tambah=False); tutup_detail(); st.rerun()
             st.markdown('</div>', unsafe_allow_html=True)
+
+        st.markdown('<div class="menu-kategori">AKUN</div>', unsafe_allow_html=True)
+        pengguna = st.session_state.get("pengguna") or {}
+        st.caption(
+            f"Masuk sebagai **{pengguna.get('nama', '-')}** "
+            f"({pengguna.get('peran', '-')})"
+        )
+        if st.button(
+            "Keluar", key="nav_keluar", icon=":material/logout:",
+            use_container_width=True,
+        ):
+            st.session_state["pengguna"] = None
+            st.session_state.update(halaman="Dashboard", mode_tambah=False)
+            tutup_detail()
+            st.rerun()
+
 
 # ================= HALAMAN: DASHBOARD =================
 def halaman_dashboard():
@@ -1294,6 +1386,14 @@ def tampilkan_detail_buku(id_buk):
         c3.markdown(badge(t["status"]), unsafe_allow_html=True)
 
 # ================= ROUTING UTAMA =================
+if st.session_state["pengguna"] is None:
+    halaman_login()
+    st.stop()
+
+if st.session_state["pengguna"].get("harus_ganti_password"):
+    halaman_ganti_password()
+    st.stop()
+
 render_sidebar()
 tampil_flash()
 
