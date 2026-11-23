@@ -1311,14 +1311,41 @@ def halaman_kelola_pengguna():
     st.title("Kelola Pengguna")
     if not butuh_admin():
         return
+    # Reset sebelum checkbox dibuat: nilai widget tidak boleh diubah setelah
+    # widget tersebut dirender.
+    if st.session_state.pop("bersihkan_konfirmasi_admin", False):
+        st.session_state["yakin_tambah_admin"] = False
     st.caption(
-        "Tambah akun petugas, nonaktifkan akun yang tidak dipakai, dan reset "
-        "password. Hanya admin yang dapat membuka halaman ini."
+        "Tambah akun petugas atau admin, nonaktifkan akun yang tidak dipakai, "
+        "dan reset password. Hanya admin yang dapat membuka halaman ini."
     )
     pengguna_aktif = st.session_state["pengguna"]
 
-    with st.expander("Tambah petugas baru"):
-        with st.form("form_tambah_petugas", border=False):
+    with st.expander("Tambah akun baru"):
+        # Pemilih peran di luar form agar peringatan peran langsung tampil
+        # saat pilihan berubah, sebelum form dikirim.
+        peran_baru = st.selectbox(
+            "Peran akun baru",
+            ("PETUGAS", "ADMIN"),
+            key="peran_akun_baru",
+            help=(
+                "PETUGAS: menu operasional saja (dashboard, peminjaman, "
+                "pengembalian, transaksi, denda). ADMIN: seluruh menu, "
+                "termasuk data master dan Kelola Pengguna."
+            ),
+        )
+        yakin_admin = False
+        if peran_baru == "ADMIN":
+            st.warning(
+                "Akun ADMIN dapat mengubah data master, mengelola akun lain, "
+                "dan mereset password siapa pun. Pilih ADMIN hanya bila peran "
+                "penuh memang diperlukan."
+            )
+            yakin_admin = st.checkbox(
+                "Saya yakin akun ini harus berperan ADMIN",
+                key="yakin_tambah_admin",
+            )
+        with st.form("form_tambah_pengguna", border=False):
             nama = st.text_input("Nama lengkap", placeholder="Cth: Rina Petugas")
             username = st.text_input("Username", placeholder="Cth: rina")
             awal = st.text_input(
@@ -1327,34 +1354,50 @@ def halaman_kelola_pengguna():
             )
             awal_ulang = st.text_input("Ulangi password awal", type="password")
             simpan = st.form_submit_button(
-                "Tambah Petugas", type="primary", icon=":material/person_add:"
+                f"Tambah {peran_baru.title()}",
+                type="primary", icon=":material/person_add:",
             )
         if simpan:
             if not nama.strip() or not username.strip():
                 st.error("Nama dan username wajib diisi.")
             elif awal != awal_ulang:
                 st.error("Konfirmasi password awal tidak sama.")
+            elif peran_baru == "ADMIN" and not yakin_admin:
+                st.error(
+                    "Centang konfirmasi peran ADMIN terlebih dahulu supaya "
+                    "akun tidak salah peran."
+                )
             else:
                 try:
                     db.buat_pengguna(
-                        nama, username, awal, peran="PETUGAS", harus_ganti=True
+                        nama, username, awal, peran=peran_baru,
+                        harus_ganti=True,
+                        konfirmasi_peran_admin=yakin_admin,
                     )
                 except ValueError as error:
                     st.error(str(error))
                 else:
+                    st.session_state["bersihkan_konfirmasi_admin"] = True
                     flash(
-                        f"Petugas '{username.strip()}' berhasil ditambahkan. "
-                        "Password awal wajib diganti saat login pertama."
+                        f"Akun {peran_baru} '{username.strip()}' berhasil "
+                        "ditambahkan. Password awal wajib diganti saat login "
+                        "pertama."
                     )
                     st.rerun()
 
     konfirmasi = st.session_state.get("konfirmasi_pengguna")
     if konfirmasi:
         with st.container(border=True):
-            st.warning(
+            pesan_nonaktif = (
                 f"**Nonaktifkan akun '{konfirmasi['username']}'?** "
                 "Pengguna ini tidak akan bisa login sampai diaktifkan kembali."
             )
+            if konfirmasi.get("peran") == "ADMIN":
+                pesan_nonaktif += (
+                    " Akun ini berperan ADMIN sehingga kehilangan akses ke "
+                    "data master dan Kelola Pengguna."
+                )
+            st.warning(pesan_nonaktif)
             ya, batal = st.columns(2)
             if ya.button(
                 "Ya, Nonaktifkan", key="konfirmasi_pengguna_ya",
@@ -1460,6 +1503,7 @@ def halaman_kelola_pengguna():
                 ):
                     st.session_state["konfirmasi_pengguna"] = {
                         "id": p["id"], "username": p["username"],
+                        "peran": p["peran"],
                     }
                     st.rerun()
             else:

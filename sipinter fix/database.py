@@ -704,14 +704,24 @@ def _validasi_password(password):
         )
 
 
-def buat_pengguna(nama, username, password, peran="PETUGAS", harus_ganti=True):
-    """Buat pengguna baru beserta kredensialnya. Mengembalikan id pengguna."""
+def buat_pengguna(nama, username, password, peran="PETUGAS", harus_ganti=True,
+                  konfirmasi_peran_admin=False):
+    """Buat pengguna baru beserta kredensialnya. Mengembalikan id pengguna.
+
+    Akun berperan ADMIN hanya dibuat bila pemanggil menyatakan
+    ``konfirmasi_peran_admin=True``, sebagai pengaman agar tidak salah peran.
+    """
     nama = (nama or "").strip()
     username = (username or "").strip()
+    peran = (peran or "").strip().upper()
     if not nama or not username:
         raise ValueError("Nama dan username wajib diisi.")
     if peran not in ("ADMIN", "PETUGAS"):
         raise ValueError("Peran harus ADMIN atau PETUGAS.")
+    if peran == "ADMIN" and not konfirmasi_peran_admin:
+        raise ValueError(
+            "Pembuatan akun ADMIN perlu konfirmasi peran agar tidak salah peran."
+        )
     _validasi_password(password)
     hash_baru = hash_password(password)
     sekarang = _sekarang()
