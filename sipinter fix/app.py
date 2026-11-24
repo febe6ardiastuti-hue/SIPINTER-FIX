@@ -38,6 +38,8 @@ st.markdown("""
 
 div.stButton > button[kind="primary"] { background: #365a7a; color: white; border: 1px solid #365a7a; border-radius: 8px; font-weight: 600; }
 div.stButton > button[kind="primary"]:hover { background: #2d4d69; border-color: #2d4d69; color: white; }
+div[data-testid="stFormSubmitButton"] > button[kind="primaryFormSubmit"] { background: #365a7a; color: white; border: 1px solid #365a7a; border-radius: 8px; font-weight: 600; }
+div[data-testid="stFormSubmitButton"] > button[kind="primaryFormSubmit"]:hover { background: #2d4d69; border-color: #2d4d69; color: white; }
 </style>
 """, unsafe_allow_html=True)
 
@@ -59,6 +61,15 @@ def tgl(t):
     return f"{t.day} {BULAN[t.month-1]} {t.year}"
 
 def rp(n): return f"Rp{int(n):,}".replace(",", ".")
+
+def waktu_singkat(t):
+    if not t:
+        return "-"
+    try:
+        waktu = datetime.strptime(str(t)[:19], "%Y-%m-%d %H:%M:%S")
+    except ValueError:
+        return str(t)
+    return f"{waktu.day} {BULAN[waktu.month-1]} {waktu.year}, {waktu:%H:%M}"
 
 def badge(s):
     cfg = {
@@ -244,6 +255,33 @@ def halaman_ganti_password():
             st.rerun()
 
 
+# ================= HAK AKSES =================
+MENU_PER_PERAN = {
+    "ADMIN": [
+        "Dashboard", "Peminjaman", "Pengembalian", "Transaksi", "Denda",
+        "Buku", "Anggota", "Penulis", "Penerbit", "Kelola Pengguna",
+    ],
+    "PETUGAS": ["Dashboard", "Peminjaman", "Pengembalian", "Transaksi", "Denda"],
+}
+MENU_MASTER = ["Buku", "Anggota", "Penulis", "Penerbit"]
+
+
+def menu_diizinkan(peran):
+    return MENU_PER_PERAN.get(peran, MENU_PER_PERAN["PETUGAS"])
+
+
+def adalah_admin():
+    pengguna = st.session_state.get("pengguna") or {}
+    return pengguna.get("peran") == "ADMIN"
+
+
+def butuh_admin():
+    if adalah_admin():
+        return True
+    st.error("Halaman ini hanya dapat diakses oleh admin.")
+    return False
+
+
 # ================= SIDEBAR =================
 def render_sidebar():
     nav_icons = {
@@ -255,13 +293,27 @@ def render_sidebar():
         "Anggota": ":material/group:",
         "Penulis": ":material/edit_note:",
         "Penerbit": ":material/business:",
+        "Kelola Pengguna": ":material/manage_accounts:",
     }
+    pengguna = st.session_state.get("pengguna") or {}
+    izin = menu_diizinkan(pengguna.get("peran"))
+
+    def tombol_menu(nama):
+        aktif = "menu-active" if st.session_state["halaman"] == nama else ""
+        st.markdown(f'<div class="{aktif}">', unsafe_allow_html=True)
+        if st.button(
+            nama, key=f"nav_{nama}", icon=nav_icons[nama],
+            type="primary" if aktif else "secondary", use_container_width=True,
+        ):
+            st.session_state.update(halaman=nama, mode_tambah=False); tutup_detail(); st.rerun()
+        st.markdown('</div>', unsafe_allow_html=True)
+
     with st.sidebar:
         _, logo_center, _ = st.columns([1, 2, 1])
         with logo_center:
             st.image(str(logo_path), width=120)
         st.markdown('<div class="sidebar-logo"><h2>SIPINTER</h2></div>', unsafe_allow_html=True)
-        
+
         aktif = "menu-active" if st.session_state["halaman"] == "Dashboard" else ""
         st.markdown(f'<div class="{aktif}">', unsafe_allow_html=True)
         if st.button(
@@ -271,41 +323,25 @@ def render_sidebar():
             st.session_state.update(halaman="Dashboard", mode_tambah=False); tutup_detail(); st.rerun()
         st.markdown('</div>', unsafe_allow_html=True)
 
-        st.markdown('<div class="menu-kategori">PROSES</div>', unsafe_allow_html=True)
-        for nama in ["Peminjaman", "Pengembalian"]:
-            aktif = "menu-active" if st.session_state["halaman"] == nama else ""
-            st.markdown(f'<div class="{aktif}">', unsafe_allow_html=True)
-            if st.button(
-                nama, key=f"nav_{nama}", icon=nav_icons[nama],
-                type="primary" if aktif else "secondary", use_container_width=True,
-            ):
-                st.session_state.update(halaman=nama, mode_tambah=False); tutup_detail(); st.rerun()
-            st.markdown('</div>', unsafe_allow_html=True)
+        if "Peminjaman" in izin:
+            st.markdown('<div class="menu-kategori">PROSES</div>', unsafe_allow_html=True)
+            for nama in [n for n in ["Peminjaman", "Pengembalian"] if n in izin]:
+                tombol_menu(nama)
 
-        st.markdown('<div class="menu-kategori">TRANSAKSI</div>', unsafe_allow_html=True)
-        for nama in ["Transaksi", "Denda"]:
-            aktif = "menu-active" if st.session_state["halaman"] == nama else ""
-            st.markdown(f'<div class="{aktif}">', unsafe_allow_html=True)
-            if st.button(
-                nama, key=f"nav_{nama}", icon=nav_icons[nama],
-                type="primary" if aktif else "secondary", use_container_width=True,
-            ):
-                st.session_state.update(halaman=nama, mode_tambah=False); tutup_detail(); st.rerun()
-            st.markdown('</div>', unsafe_allow_html=True)
+        if "Transaksi" in izin:
+            st.markdown('<div class="menu-kategori">TRANSAKSI</div>', unsafe_allow_html=True)
+            for nama in [n for n in ["Transaksi", "Denda"] if n in izin]:
+                tombol_menu(nama)
 
-        st.markdown('<div class="menu-kategori">MASTER DATA</div>', unsafe_allow_html=True)
-        for nama in ["Buku", "Anggota", "Penulis", "Penerbit"]:
-            aktif = "menu-active" if st.session_state["halaman"] == nama else ""
-            st.markdown(f'<div class="{aktif}">', unsafe_allow_html=True)
-            if st.button(
-                nama, key=f"nav_{nama}", icon=nav_icons[nama],
-                type="primary" if aktif else "secondary", use_container_width=True,
-            ):
-                st.session_state.update(halaman=nama, mode_tambah=False); tutup_detail(); st.rerun()
-            st.markdown('</div>', unsafe_allow_html=True)
+        master = [n for n in MENU_MASTER if n in izin]
+        if master:
+            st.markdown('<div class="menu-kategori">MASTER DATA</div>', unsafe_allow_html=True)
+            for nama in master:
+                tombol_menu(nama)
 
         st.markdown('<div class="menu-kategori">AKUN</div>', unsafe_allow_html=True)
-        pengguna = st.session_state.get("pengguna") or {}
+        if "Kelola Pengguna" in izin:
+            tombol_menu("Kelola Pengguna")
         st.caption(
             f"Masuk sebagai **{pengguna.get('nama', '-')}** "
             f"({pengguna.get('peran', '-')})"
@@ -704,6 +740,8 @@ def halaman_denda():
 # ================= HALAMAN: MASTER DATA =================
 def halaman_master_buku():
     st.title("Data Buku")
+    if not butuh_admin():
+        return
     
     if st.button("Tambah Buku", type="primary", icon=":material/add:"):
         st.session_state["mode_edit_buku"] = None
@@ -947,6 +985,8 @@ def halaman_master_buku():
 
 def halaman_master_anggota():
     st.title("Data Anggota")
+    if not butuh_admin():
+        return
     
     if st.button("Tambah Anggota", type="primary", icon=":material/person_add:"):
         st.session_state["mode_edit_peminjam"] = None
@@ -1192,6 +1232,8 @@ def halaman_master_anggota():
 
 def halaman_master_penulis():
     st.title("Data Penulis")
+    if not butuh_admin():
+        return
     if st.button("Tambah Penulis", type="primary", icon=":material/add:"):
         st.session_state["mode_tambah"] = "penulis"
         
@@ -1228,6 +1270,8 @@ def halaman_master_penulis():
 
 def halaman_master_penerbit():
     st.title("Data Penerbit")
+    if not butuh_admin():
+        return
     if st.button("Tambah Penerbit", type="primary", icon=":material/add:"):
         st.session_state["mode_tambah"] = "penerbit"
         
@@ -1261,6 +1305,231 @@ def halaman_master_penerbit():
             if col2.button("Hapus", key=f"hpt_{p['id']}", icon=":material/delete:"):
                 if p['jml_buku'] > 0: st.error("Tidak dapat menghapus data karena masih terdapat buku terkait.")
                 else: db.x("DELETE FROM penerbit WHERE id=?", (p["id"],)); st.success("Data penerbit berhasil dihapus."); st.rerun()
+
+# ================= HALAMAN: KELOLA PENGGUNA =================
+def halaman_kelola_pengguna():
+    st.title("Kelola Pengguna")
+    if not butuh_admin():
+        return
+    # Reset sebelum checkbox dibuat: nilai widget tidak boleh diubah setelah
+    # widget tersebut dirender.
+    if st.session_state.pop("bersihkan_konfirmasi_admin", False):
+        st.session_state["yakin_tambah_admin"] = False
+    st.caption(
+        "Tambah akun petugas atau admin, nonaktifkan akun yang tidak dipakai, "
+        "dan reset password. Hanya admin yang dapat membuka halaman ini."
+    )
+    pengguna_aktif = st.session_state["pengguna"]
+
+    with st.expander("Tambah akun baru"):
+        # Pemilih peran di luar form agar peringatan peran langsung tampil
+        # saat pilihan berubah, sebelum form dikirim.
+        peran_baru = st.selectbox(
+            "Peran akun baru",
+            ("PETUGAS", "ADMIN"),
+            key="peran_akun_baru",
+            help=(
+                "PETUGAS: menu operasional saja (dashboard, peminjaman, "
+                "pengembalian, transaksi, denda). ADMIN: seluruh menu, "
+                "termasuk data master dan Kelola Pengguna."
+            ),
+        )
+        yakin_admin = False
+        if peran_baru == "ADMIN":
+            st.warning(
+                "Akun ADMIN dapat mengubah data master, mengelola akun lain, "
+                "dan mereset password siapa pun. Pilih ADMIN hanya bila peran "
+                "penuh memang diperlukan."
+            )
+            yakin_admin = st.checkbox(
+                "Saya yakin akun ini harus berperan ADMIN",
+                key="yakin_tambah_admin",
+            )
+        with st.form("form_tambah_pengguna", border=False):
+            nama = st.text_input("Nama lengkap", placeholder="Cth: Rina Petugas")
+            username = st.text_input("Username", placeholder="Cth: rina")
+            awal = st.text_input(
+                f"Password awal (minimal {db.PANJANG_MIN_PASSWORD} karakter)",
+                type="password",
+            )
+            awal_ulang = st.text_input("Ulangi password awal", type="password")
+            simpan = st.form_submit_button(
+                f"Tambah {peran_baru.title()}",
+                type="primary", icon=":material/person_add:",
+            )
+        if simpan:
+            if not nama.strip() or not username.strip():
+                st.error("Nama dan username wajib diisi.")
+            elif awal != awal_ulang:
+                st.error("Konfirmasi password awal tidak sama.")
+            elif peran_baru == "ADMIN" and not yakin_admin:
+                st.error(
+                    "Centang konfirmasi peran ADMIN terlebih dahulu supaya "
+                    "akun tidak salah peran."
+                )
+            else:
+                try:
+                    db.buat_pengguna(
+                        nama, username, awal, peran=peran_baru,
+                        harus_ganti=True,
+                        konfirmasi_peran_admin=yakin_admin,
+                    )
+                except ValueError as error:
+                    st.error(str(error))
+                else:
+                    st.session_state["bersihkan_konfirmasi_admin"] = True
+                    flash(
+                        f"Akun {peran_baru} '{username.strip()}' berhasil "
+                        "ditambahkan. Password awal wajib diganti saat login "
+                        "pertama."
+                    )
+                    st.rerun()
+
+    konfirmasi = st.session_state.get("konfirmasi_pengguna")
+    if konfirmasi:
+        with st.container(border=True):
+            pesan_nonaktif = (
+                f"**Nonaktifkan akun '{konfirmasi['username']}'?** "
+                "Pengguna ini tidak akan bisa login sampai diaktifkan kembali."
+            )
+            if konfirmasi.get("peran") == "ADMIN":
+                pesan_nonaktif += (
+                    " Akun ini berperan ADMIN sehingga kehilangan akses ke "
+                    "data master dan Kelola Pengguna."
+                )
+            st.warning(pesan_nonaktif)
+            ya, batal = st.columns(2)
+            if ya.button(
+                "Ya, Nonaktifkan", key="konfirmasi_pengguna_ya",
+                type="primary", icon=":material/check:",
+            ):
+                try:
+                    db.set_status_pengguna(
+                        konfirmasi["id"], False, pengguna_aktif["id"]
+                    )
+                except ValueError as error:
+                    st.session_state["konfirmasi_pengguna"] = None
+                    flash(str(error), "error")
+                else:
+                    st.session_state["konfirmasi_pengguna"] = None
+                    flash(f"Akun '{konfirmasi['username']}' dinonaktifkan.")
+                st.rerun()
+            if batal.button(
+                "Batal", key="konfirmasi_pengguna_batal", icon=":material/close:"
+            ):
+                st.session_state["konfirmasi_pengguna"] = None
+                st.rerun()
+
+    data = db.daftar_pengguna()
+
+    reset_id = st.session_state.get("reset_pengguna")
+    if reset_id is not None:
+        target = next((p for p in data if p["id"] == reset_id), None)
+        if not target:
+            st.session_state["reset_pengguna"] = None
+        else:
+            with st.container(border=True):
+                st.subheader(
+                    f"Reset password: {target['nama']} ({target['username']})"
+                )
+                with st.form(f"form_reset_password_{reset_id}", border=False):
+                    baru = st.text_input(
+                        "Password baru", type="password",
+                        key=f"reset_baru_{reset_id}",
+                    )
+                    baru_ulang = st.text_input(
+                        "Ulangi password baru", type="password",
+                        key=f"reset_ulang_{reset_id}",
+                    )
+                    simpan_reset = st.form_submit_button(
+                        "Simpan password baru", type="primary", icon=":material/save:"
+                    )
+                if simpan_reset:
+                    if baru != baru_ulang:
+                        st.error("Konfirmasi password baru tidak sama.")
+                    else:
+                        try:
+                            pesan = db.reset_password_pengguna(reset_id, baru)
+                        except ValueError as error:
+                            st.error(str(error))
+                        else:
+                            st.session_state["reset_pengguna"] = None
+                            flash(pesan)
+                            st.rerun()
+                if st.button(
+                    "Batal", key="batal_reset_pengguna", icon=":material/close:"
+                ):
+                    st.session_state["reset_pengguna"] = None
+                    st.rerun()
+
+    lebar_kolom = [2.8, 2.4, 2.8, 3.4]
+    kolom = st.columns(lebar_kolom)
+    for col, label in zip(
+        kolom, ("Pengguna", "Peran & Status", "Aktivitas", "Aksi")
+    ):
+        col.markdown(f"**{label}**")
+    st.markdown(
+        "<hr style='margin:0; border:1px solid #e5e7eb'>", unsafe_allow_html=True
+    )
+
+    for p in data:
+        baris = st.columns(lebar_kolom)
+        baris[0].markdown(f"**{p['nama']}**  \n@{p['username']}")
+        if p["aktif"]:
+            label_status = (
+                "<span style='background:#15803d;color:#fff;padding:2px 10px;"
+                "border-radius:10px;font-size:12px;font-weight:600;"
+                "white-space:nowrap'>AKTIF</span>"
+            )
+        else:
+            label_status = (
+                "<span style='background:#4b5563;color:#fff;padding:2px 10px;"
+                "border-radius:10px;font-size:12px;font-weight:600;"
+                "white-space:nowrap'>NONAKTIF</span>"
+            )
+        baris[1].markdown(
+            f"**{p['peran']}**  \n{label_status}", unsafe_allow_html=True
+        )
+        baris[2].markdown(
+            f"Terakhir masuk: {waktu_singkat(p['terakhir_login'])}  \n"
+            f"Password: "
+            f"{'wajib diganti' if p['harus_ganti_password'] else 'sudah diganti'}"
+        )
+        with baris[3]:
+            if p["aktif"]:
+                if st.button(
+                    "Nonaktifkan", key=f"nonaktif_{p['id']}",
+                    icon=":material/block:", use_container_width=True,
+                ):
+                    st.session_state["konfirmasi_pengguna"] = {
+                        "id": p["id"], "username": p["username"],
+                        "peran": p["peran"],
+                    }
+                    st.rerun()
+            else:
+                if st.button(
+                    "Aktifkan", key=f"aktifkan_{p['id']}",
+                    icon=":material/check_circle:", use_container_width=True,
+                ):
+                    try:
+                        pesan = db.set_status_pengguna(
+                            p["id"], True, pengguna_aktif["id"]
+                        )
+                    except ValueError as error:
+                        st.error(str(error))
+                    else:
+                        flash(f"Akun '{p['username']}' diaktifkan.")
+                        st.rerun()
+            if st.button(
+                "Reset Password", key=f"reset_{p['id']}",
+                icon=":material/key:", use_container_width=True,
+            ):
+                st.session_state["reset_pengguna"] = p["id"]
+                st.rerun()
+        st.markdown(
+            "<hr style='margin:0 0 12px 0; border:0; border-top:1px solid #eef2f7'>",
+            unsafe_allow_html=True,
+        )
 
 # ================= DETAIL =================
 def tampilkan_detail_transaksi(id_trx):
@@ -1394,6 +1663,21 @@ if st.session_state["pengguna"].get("harus_ganti_password"):
     halaman_ganti_password()
     st.stop()
 
+pengguna = st.session_state["pengguna"]
+status = db.status_pengguna(pengguna["id"])
+if not status or not status["aktif"]:
+    st.session_state["pengguna"] = None
+    st.session_state.update(halaman="Dashboard", mode_tambah=False)
+    tutup_detail()
+    st.error("Akun Anda tidak aktif atau telah dinonaktifkan. Hubungi admin.")
+    halaman_login()
+    st.stop()
+pengguna["peran"] = status["peran"]
+pengguna["nama"] = status["nama"]
+st.session_state["pengguna"] = pengguna
+if st.session_state["halaman"] not in menu_diizinkan(pengguna["peran"]):
+    st.session_state["halaman"] = "Dashboard"
+
 render_sidebar()
 tampil_flash()
 
@@ -1409,3 +1693,4 @@ elif st.session_state["halaman"] == "Penulis": halaman_master_penulis()
 elif st.session_state["halaman"] == "Penerbit": halaman_master_penerbit()
 elif st.session_state["halaman"] == "Transaksi": halaman_transaksi()
 elif st.session_state["halaman"] == "Denda": halaman_denda()
+elif st.session_state["halaman"] == "Kelola Pengguna": halaman_kelola_pengguna()

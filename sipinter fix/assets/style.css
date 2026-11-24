@@ -182,6 +182,28 @@ div.stButton > button[kind="secondary"]:hover {
     border-color: #d3dae2;
     border-radius: 7px;
 }
+
+/* Streamlit 1.67 memakai react-aria untuk selectbox: samakan pemilih peran
+   pada form tambah akun dengan field teks lain (putih, radius 7, fokus teal). */
+.st-key-peran_akun_baru .react-aria-ComboBox > div[role="group"] {
+    background: var(--surface) !important;
+    border-color: #d3dae2 !important;
+    border-radius: 7px !important;
+}
+.st-key-peran_akun_baru .react-aria-ComboBox > div[role="group"]:hover {
+    border-color: #bfc9d4 !important;
+}
+.st-key-peran_akun_baru .react-aria-ComboBox > div[role="group"][data-focus-within="true"] {
+    border-color: var(--teal) !important;
+    box-shadow: 0 0 0 1px rgba(91, 130, 126, .18);
+}
+
+/* Kotak cek konfirmasi peran memakai warna utama tema (merah);
+   samakan dengan warna aksi aplikasi. */
+.st-key-yakin_tambah_admin [data-testid="stCheckbox"][data-selected="true"] label > div:first-of-type {
+    background-color: var(--blue) !important;
+    border-color: var(--blue) !important;
+}
 [data-testid="stExpander"] {
     background: var(--surface);
     border: 1px solid var(--line);
